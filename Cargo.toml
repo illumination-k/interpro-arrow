@@ -9,6 +9,7 @@ edition = "2021"
 anyhow = "1.0.57"
 arrow2 = { git = "https://github.com/jorgecarleitao/arrow2", features = ["io_ipc", "io_ipc_compression", "io_print"] }
 flate2 = "1.0.23"
+polars = "0.21.1"
 structopt = "0.3.26"
 strum = "0.24.0"
 strum_macros = "0.24.0"

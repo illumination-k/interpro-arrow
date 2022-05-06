@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::{fmt::Debug, fs::File, sync::Arc};
+use std::{fmt::Debug, fs::File, io::BufWriter, sync::Arc};
 
 use arrow2::{
     array::{Array, Int16Array, Utf8Array},
@@ -60,7 +60,6 @@ impl Debug for GeneRecords {
         Ok(())
     }
 }
-
 
 impl GeneRecords {
     pub fn new(chunk_size: u32) -> Self {
@@ -130,7 +129,7 @@ impl GeneRecords {
     }
 
     fn rechunk(&mut self) -> Result<()> {
-        if !self.chunk_size as usize == self.len() {
+        if !(self.chunk_size as usize == self.len()) {
             return Ok(());
         }
 
@@ -139,6 +138,25 @@ impl GeneRecords {
         self.chunks.push(chunk);
 
         self.init();
+        Ok(())
+    }
+
+    pub fn write(mut self, path: &str) -> Result<()> {
+        self.finish()?;
+        let file = File::create(path)?;
+        let options = write::WriteOptions {
+            compression: Some(Compression::LZ4),
+        };
+
+        let mut writer = FileWriter::try_new(BufWriter::new(file), &self.schema, None, options)?;
+        // writer.start()?;
+
+        for chunk in self.chunks.iter() {
+            writer.write(chunk, None)?;
+        }
+
+        writer.finish()?;
+
         Ok(())
     }
 }
@@ -247,7 +265,7 @@ impl DomainRecords {
     }
 
     fn rechunk(&mut self) -> Result<()> {
-        if !self.chunk_size as usize == self.len() {
+        if !(self.chunk_size as usize == self.len()) {
             return Ok(());
         }
 
@@ -276,8 +294,7 @@ impl DomainRecords {
             compression: Some(Compression::LZ4),
         };
 
-        let mut writer = FileWriter::new(file, self.schema, None, options);
-        writer.start()?;
+        let mut writer = FileWriter::try_new(BufWriter::new(file), &self.schema, None, options)?;
 
         for chunk in self.chunks.iter() {
             writer.write(chunk, None)?;

@@ -9,7 +9,7 @@ use std::{
 use anyhow::{anyhow, Result};
 use flate2::read::MultiGzDecoder;
 
-use crate::records::{DomainRecords, Term};
+use crate::records::{DomainRecords, GeneRecords, Term};
 
 fn is_compressed<P: AsRef<Path>>(p: &P) -> bool {
     let ext = p.as_ref().extension();
@@ -128,6 +128,44 @@ pub fn parse_gffrecord_line(line: &str, domain_records: &mut DomainRecords) -> R
         Err(anyhow!("domain name is required"))
     }
 }
+
+fn parse_fasta_lines(fasta_lines: &[String], organism: String) -> Result<GeneRecords> {
+    let mut gene_records = GeneRecords::new(5000);
+
+    let mut iter = fasta_lines.into_iter().peekable();
+
+    fn is_header(line: &str) -> bool {
+        line.starts_with('>')
+    }
+
+    while let Some(line) = iter.next() {
+        if !is_header(line) {
+            return Err(anyhow!("Expected > at record start"))
+        }
+
+        let mut header_fields = line[1..].trim_end().splitn(2, char::is_whitespace);
+        let gene_id = header_fields.next().map(|s| s.to_owned()).unwrap();
+        let desc = header_fields.next().map(|s| s.to_owned());
+
+        let mut seq = String::new();
+        loop {
+            if let Some(peek_line) = iter.peek() {
+                if is_header(peek_line) {
+                    break;
+                }
+
+                seq.push_str(iter.next().unwrap())
+            } else {
+                break;
+            }
+        }
+
+        gene_records.push(gene_id, seq, desc, organism.clone())?;
+    }
+
+    Ok(gene_records)
+}
+
 pub struct Reader {
     reader: Box<dyn BufRead>,
 }
@@ -139,13 +177,14 @@ impl Reader {
         })
     }
 
-    pub fn finish(self) -> Result<()> {
+    pub fn finish(self) -> Result<(DomainRecords, GeneRecords)> {
         let comment = '#';
         let fasta_line = "##FASTA";
-        
-        let mut domain_records = DomainRecords::new(5000);
-        
+
+        let mut domain_records = DomainRecords::new(100000);
+
         let mut is_fasta = false;
+        let mut fasta_lines = Vec::new();
         for line in self.reader.lines() {
             let line = line?;
             if line.starts_with(fasta_line) {
@@ -163,12 +202,13 @@ impl Reader {
 
             if !is_fasta {
                 parse_gffrecord_line(&line, &mut domain_records)?;
+            } else {
+                fasta_lines.push(line);
             }
         }
 
-        dbg!(&domain_records);
+        let gene_records = parse_fasta_lines(&fasta_lines, "Olucimarinus".to_string())?;
 
-
-        Ok(())
+        Ok((domain_records, gene_records))
     }
 }
