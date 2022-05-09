@@ -6,8 +6,11 @@ use std::{
     str::FromStr,
 };
 
+use std::convert::{Into, TryFrom};
+
 use anyhow::{anyhow, Result};
 use flate2::read::MultiGzDecoder;
+use polars::prelude::*;
 
 use crate::records::{DomainRecords, GeneRecords, Term};
 
@@ -65,7 +68,7 @@ pub fn parse_gffrecord_line(line: &str, domain_records: &mut DomainRecords) -> R
             domain_desc = Some(values)
         } else if key == "Ontology_term" {
             // Ontology_term="GO:0008654","GO:0016020","GO:0016780"
-            for term_name in values.split(",") {
+            for term_name in values.split(',') {
                 let term_name = term_name.trim_matches('\"');
                 domain_records.push(
                     Term::GoTerm,
@@ -77,8 +80,8 @@ pub fn parse_gffrecord_line(line: &str, domain_records: &mut DomainRecords) -> R
                 )?;
             }
         } else if attr_records[0] == "Dbxref" {
-            for type_term in values.split(",") {
-                let type_term: Vec<&str> = type_term.trim_matches('\"').split(":").collect();
+            for type_term in values.split(',') {
+                let type_term: Vec<&str> = type_term.trim_matches('\"').split(':').collect();
                 let (type_, term_name) = (type_term[0], type_term[1]);
 
                 match type_ {
@@ -132,7 +135,7 @@ pub fn parse_gffrecord_line(line: &str, domain_records: &mut DomainRecords) -> R
 fn parse_fasta_lines(fasta_lines: &[String], organism: String) -> Result<GeneRecords> {
     let mut gene_records = GeneRecords::new(5000);
 
-    let mut iter = fasta_lines.into_iter().peekable();
+    let mut iter = fasta_lines.iter().peekable();
 
     fn is_header(line: &str) -> bool {
         line.starts_with('>')
@@ -140,7 +143,7 @@ fn parse_fasta_lines(fasta_lines: &[String], organism: String) -> Result<GeneRec
 
     while let Some(line) = iter.next() {
         if !is_header(line) {
-            return Err(anyhow!("Expected > at record start"))
+            return Err(anyhow!("Expected > at record start"));
         }
 
         let mut header_fields = line[1..].trim_end().splitn(2, char::is_whitespace);
@@ -148,16 +151,12 @@ fn parse_fasta_lines(fasta_lines: &[String], organism: String) -> Result<GeneRec
         let desc = header_fields.next().map(|s| s.to_owned());
 
         let mut seq = String::new();
-        loop {
-            if let Some(peek_line) = iter.peek() {
-                if is_header(peek_line) {
-                    break;
-                }
-
-                seq.push_str(iter.next().unwrap())
-            } else {
+        while let Some(peek_line) = iter.peek() {
+            if is_header(peek_line) {
                 break;
             }
+
+            seq.push_str(iter.next().unwrap())
         }
 
         gene_records.push(gene_id, seq, desc, organism.clone())?;
@@ -181,7 +180,7 @@ impl Reader {
         let comment = '#';
         let fasta_line = "##FASTA";
 
-        let mut domain_records = DomainRecords::new(100000);
+        let mut domain_records = DomainRecords::new(10000);
 
         let mut is_fasta = false;
         let mut fasta_lines = Vec::new();

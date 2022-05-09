@@ -1,10 +1,10 @@
 /*
 register
 - gff3
-- write ipc path
+- write ipc dir
 - org
 find
-- ipc dir
+- roots dir
 - orgs
 - domain expr
 - format

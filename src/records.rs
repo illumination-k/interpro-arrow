@@ -1,8 +1,19 @@
-use anyhow::Result;
-use std::{fmt::Debug, fs::File, io::BufWriter, sync::Arc};
+use anyhow::{anyhow, Result};
+use arrow2::array::ArrayRef;
+use polars_core::POOL;
+use strum::IntoEnumIterator;
+
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    fs::{self, File},
+    io::BufWriter,
+    path::PathBuf,
+    sync::Arc,
+};
 
 use arrow2::{
-    array::{Array, Int16Array, Utf8Array},
+    array::{Int16Array, Utf8Array},
     chunk::Chunk,
     datatypes::{DataType, Field, Schema},
     io::ipc::write::{self, Compression, FileWriter},
@@ -35,6 +46,37 @@ pub enum Term {
     InterPro,
 }
 
+impl Term {
+    pub fn try_infer(name: &str) -> Result<Term> {
+        let term = match name {
+            "mobidb-lite" => Term::MobiDBLite,
+            // C
+            n if n.starts_with("cd") => Term::CDD,
+            // G
+            n if n.starts_with("G3DSA") => Term::Gene3D,
+            n if n.starts_with("GO") => Term::GoTerm,
+            // I
+            n if n.starts_with("IRR") => Term::InterPro,
+            // P
+            n if n.starts_with("PTHR") => Term::PANTHER,
+            n if n.starts_with("PWY") => Term::MetaCyc,
+            n if n.starts_with("PS") => Term::ProSiteProfiles,
+            n if n.starts_with("PF") => Term::Pfam,
+            // S
+            n if n.starts_with("SSF") => Term::SUPERFAMILY,
+            n if n.starts_with("SM") => Term::SMART,
+            // T
+            n if n.starts_with("TIGR") => Term::TIGRFAM,
+            // R
+            n if n.starts_with("R-") => Term::Reactome,
+
+            _ => return Err(anyhow!(format!("No term is match: {}", name))),
+        };
+
+        Ok(term)
+    }
+}
+
 pub struct GeneRecords {
     gene_ids: Vec<String>,
     seqs: Vec<String>,
@@ -42,34 +84,21 @@ pub struct GeneRecords {
     organism: Vec<String>,
     schema: Schema,
     chunk_size: u32,
-    chunks: Vec<Chunk<Arc<dyn Array>>>,
+    chunks: Vec<Chunk<ArrayRef>>,
 }
 
-impl Debug for GeneRecords {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let table = arrow2::io::print::write(
-            &self.chunks,
-            &self
-                .schema
-                .fields
-                .iter()
-                .map(|f| f.name.to_string())
-                .collect::<Vec<String>>(),
-        );
-        f.write_str(&table)?;
-        Ok(())
-    }
+pub fn gene_records_schema() -> Schema {
+    Schema::from(vec![
+        Field::new("gene_id", DataType::Utf8, false),
+        Field::new("seq", DataType::Utf8, false),
+        Field::new("desc", DataType::Utf8, true),
+        Field::new("organism", DataType::Utf8, false),
+    ])
 }
 
 impl GeneRecords {
     pub fn new(chunk_size: u32) -> Self {
-        let schema = Schema::from(vec![
-            Field::new("gene_id", DataType::Utf8, false),
-            Field::new("seq", DataType::Utf8, false),
-            Field::new("desc", DataType::Utf8, true),
-            Field::new("organism", DataType::Utf8, false),
-        ]);
-
+        let schema = gene_records_schema();
         Self {
             gene_ids: Vec::new(),
             seqs: Vec::new(),
@@ -103,12 +132,12 @@ impl GeneRecords {
         self.len() == 0
     }
 
-    fn to_chunk(&self) -> Result<Chunk<Arc<dyn Array>>> {
+    fn to_chunk(&self) -> Result<Chunk<ArrayRef>> {
         Ok(Chunk::try_new(vec![
-            Arc::new(Utf8Array::<i32>::from_slice(&self.gene_ids)) as Arc<dyn Array>,
-            Arc::new(Utf8Array::<i32>::from_slice(&self.seqs)) as Arc<dyn Array>,
-            Arc::new(Utf8Array::<i32>::from(&self.desc)) as Arc<dyn Array>,
-            Arc::new(Utf8Array::<i32>::from_slice(&self.organism)) as Arc<dyn Array>,
+            Arc::new(Utf8Array::<i32>::from_slice(&self.gene_ids)) as ArrayRef,
+            Arc::new(Utf8Array::<i32>::from_slice(&self.seqs)) as ArrayRef,
+            Arc::new(Utf8Array::<i32>::from(&self.desc)) as ArrayRef,
+            Arc::new(Utf8Array::<i32>::from_slice(&self.organism)) as ArrayRef,
         ])?)
     }
 
@@ -129,7 +158,7 @@ impl GeneRecords {
     }
 
     fn rechunk(&mut self) -> Result<()> {
-        if !(self.chunk_size as usize == self.len()) {
+        if self.chunk_size as usize != self.len() {
             return Ok(());
         }
 
@@ -161,58 +190,48 @@ impl GeneRecords {
     }
 }
 
-pub struct DomainRecords {
-    sources: Vec<String>,
+pub fn domain_record_schema() -> Schema {
+    Schema::from(vec![
+        Field::new("start", DataType::Int16, false),
+        Field::new("end", DataType::Int16, false),
+        Field::new("domain_name", DataType::Utf8, false),
+        Field::new("domain_desc", DataType::Utf8, true),
+        Field::new("gene_id", DataType::Utf8, false),
+    ])
+}
+
+struct DomainRecord {
     starts: Vec<i16>,
     ends: Vec<i16>,
     domain_names: Vec<String>,
     domain_descs: Vec<Option<String>>,
     gene_ids: Vec<String>,
-    schema: Schema,
-    chunks: Vec<Chunk<Arc<dyn Array>>>,
-    chunk_size: u32,
 }
 
-impl Debug for DomainRecords {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let table = arrow2::io::print::write(
-            &self.chunks,
-            &self
-                .schema
-                .fields
-                .iter()
-                .map(|f| f.name.to_string())
-                .collect::<Vec<String>>(),
-        );
-        f.write_str(&table)?;
-        Ok(())
-    }
-}
-
-pub fn domain_records_schema() -> Schema {
-    Schema::from(vec![
-        Field::new("source", DataType::Utf8, false),
-        Field::new("start", DataType::Int16, false),
-        Field::new("end", DataType::Int16, false),
-        Field::new("domain_name", DataType::Utf8, false),
-        Field::new("domain_descs", DataType::Utf8, true),
-        Field::new("gene_id", DataType::Utf8, false),
-    ])
-}
-
-impl DomainRecords {
-    pub fn new(chunk_size: u32) -> Self {
+impl DomainRecord {
+    fn new() -> Self {
         Self {
-            sources: Vec::new(),
             starts: Vec::new(),
             ends: Vec::new(),
             domain_names: Vec::new(),
             domain_descs: Vec::new(),
             gene_ids: Vec::new(),
-            schema: domain_records_schema(),
-            chunks: Vec::new(),
-            chunk_size,
         }
+    }
+
+    fn push(
+        &mut self,
+        start: i16,
+        end: i16,
+        domain_name: String,
+        domain_desc: Option<String>,
+        gene_id: String,
+    ) {
+        self.starts.push(start);
+        self.ends.push(end);
+        self.domain_names.push(domain_name);
+        self.domain_descs.push(domain_desc);
+        self.gene_ids.push(gene_id);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -220,7 +239,54 @@ impl DomainRecords {
     }
 
     pub fn len(&self) -> usize {
-        self.sources.len()
+        self.gene_ids.len()
+    }
+
+    fn to_chunk(&self) -> Result<Chunk<ArrayRef>> {
+        Ok(Chunk::try_new(vec![
+            Arc::new(Int16Array::from_slice(&self.starts)) as ArrayRef,
+            Arc::new(Int16Array::from_slice(&self.ends)) as ArrayRef,
+            Arc::new(Utf8Array::<i32>::from_slice(&self.domain_names)) as ArrayRef,
+            Arc::new(Utf8Array::<i32>::from(&self.domain_descs)) as ArrayRef,
+            Arc::new(Utf8Array::<i32>::from_slice(&self.gene_ids)) as ArrayRef,
+        ])?)
+    }
+}
+
+impl Default for DomainRecord {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct DomainRecords {
+    sources: HashMap<Term, DomainRecord>,
+    schema: Schema,
+    chunks: HashMap<Term, Vec<Chunk<ArrayRef>>>,
+    chunk_size: u32,
+}
+
+impl DomainRecords {
+    pub fn new(chunk_size: u32) -> Self {
+        Self {
+            sources: Term::iter().map(|t| (t, DomainRecord::default())).collect(),
+            schema: domain_record_schema(),
+            chunks: Term::iter().map(|t| (t, Vec::new())).collect(),
+            chunk_size,
+        }
+    }
+
+    fn rechunk(&mut self) -> Result<()> {
+        for (k, v) in self.sources.iter_mut() {
+            if self.chunk_size as usize != v.len() {
+                continue;
+            }
+            let chunk = v.to_chunk()?;
+
+            self.chunks.get_mut(k).unwrap().push(chunk);
+            *v = DomainRecord::default();
+        }
+        Ok(())
     }
 
     pub fn push(
@@ -232,75 +298,54 @@ impl DomainRecords {
         domain_desc: Option<String>,
         gene_id: String,
     ) -> Result<()> {
+        if let Some(x) = self.sources.get_mut(&source) {
+            x.push(start, end, domain_name, domain_desc, gene_id)
+        };
+
         self.rechunk()?;
-
-        self.sources.push(source.to_string());
-        self.starts.push(start);
-        self.ends.push(end);
-        self.domain_names.push(domain_name);
-        self.domain_descs.push(domain_desc);
-        self.gene_ids.push(gene_id);
-
-        Ok(())
-    }
-
-    fn init(&mut self) {
-        self.sources = Vec::new();
-        self.starts = Vec::new();
-        self.ends = Vec::new();
-        self.domain_names = Vec::new();
-        self.domain_descs = Vec::new();
-        self.gene_ids = Vec::new();
-    }
-
-    fn to_chunk(&self) -> Result<Chunk<Arc<dyn Array>>> {
-        Ok(Chunk::try_new(vec![
-            Arc::new(Utf8Array::<i32>::from_slice(&self.sources)) as Arc<dyn Array>,
-            Arc::new(Int16Array::from_slice(&self.starts)) as Arc<dyn Array>,
-            Arc::new(Int16Array::from_slice(&self.ends)) as Arc<dyn Array>,
-            Arc::new(Utf8Array::<i32>::from_slice(&self.domain_names)) as Arc<dyn Array>,
-            Arc::new(Utf8Array::<i32>::from(&self.domain_descs)) as Arc<dyn Array>,
-            Arc::new(Utf8Array::<i32>::from_slice(&self.gene_ids)) as Arc<dyn Array>,
-        ])?)
-    }
-
-    fn rechunk(&mut self) -> Result<()> {
-        if !(self.chunk_size as usize == self.len()) {
-            return Ok(());
-        }
-
-        let chunk = self.to_chunk()?;
-
-        self.chunks.push(chunk);
-
-        self.init();
-
         Ok(())
     }
 
     fn finish(&mut self) -> Result<()> {
-        if !self.is_empty() {
-            let chunk = self.to_chunk()?;
-            self.chunks.push(chunk);
-            self.init();
+        for (k, v) in self.sources.iter_mut() {
+            if !v.is_empty() {
+                let chunk = v.to_chunk()?;
+
+                self.chunks.get_mut(k).unwrap().push(chunk);
+                *v = DomainRecord::default();
+            }
         }
         Ok(())
     }
 
-    pub fn write(mut self, path: &str) -> Result<()> {
+    pub fn write(mut self, dir: PathBuf) -> Result<()> {
         self.finish()?;
-        let file = File::create(path)?;
-        let options = write::WriteOptions {
-            compression: Some(Compression::LZ4),
-        };
+        println!("------ {} ------", dir.display());
+        POOL.install(|| {
+            self.chunks
+                .into_iter()
+                .map(|(source, batches)| {
+                    let mut path = PathBuf::from(&dir);
+                    path.push(format!("source={}", source));
 
-        let mut writer = FileWriter::try_new(BufWriter::new(file), &self.schema, None, options)?;
+                    fs::create_dir_all(&path)?;
 
-        for chunk in self.chunks.iter() {
-            writer.write(chunk, None)?;
-        }
+                    path.push(format!("{}.ipc", uuid::Uuid::new_v4()));
+                    let file = File::create(path)?;
+                    let options = write::WriteOptions {
+                        compression: Some(Compression::LZ4),
+                    };
+                    let mut writer =
+                        FileWriter::try_new(BufWriter::new(file), &self.schema, None, options)?;
 
-        writer.finish()?;
+                    for chunk in batches.iter() {
+                        writer.write(chunk, None)?;
+                    }
+                    writer.finish()?;
+                    Ok(())
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
 
         Ok(())
     }
