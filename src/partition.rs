@@ -52,7 +52,6 @@ pub fn select_paths(glob: &str, map: &HashMap<String, Vec<String>>) -> Result<Ve
     for path in glob::glob(glob)? {
         let path = path?;
         if check_path(&path, map) {
-            dbg!(&path);
             ret.push(path)
         }
     }

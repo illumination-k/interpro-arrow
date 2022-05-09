@@ -6,11 +6,8 @@ use std::{
     str::FromStr,
 };
 
-use std::convert::{Into, TryFrom};
-
 use anyhow::{anyhow, Result};
 use flate2::read::MultiGzDecoder;
-use polars::prelude::*;
 
 use crate::records::{DomainRecords, GeneRecords, Term};
 

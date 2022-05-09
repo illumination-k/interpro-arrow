@@ -1,4 +1,4 @@
-use std::error::Error;
+use anyhow::Result;
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq)]
 pub enum Token {
@@ -29,7 +29,7 @@ enum ParseState {
     InName,
 }
 
-pub fn lex(s: &str) -> Result<Vec<Token>, Box<dyn Error>> {
+pub fn lex(s: &str) -> Result<Vec<Token>> {
     let mut state = ParseState::Ready;
     let mut tokens = vec![];
 

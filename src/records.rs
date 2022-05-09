@@ -8,7 +8,7 @@ use std::{
     fmt::Debug,
     fs::{self, File},
     io::BufWriter,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -170,7 +170,7 @@ impl GeneRecords {
         Ok(())
     }
 
-    pub fn write(mut self, path: &str) -> Result<()> {
+    pub fn write(mut self, path: &Path) -> Result<()> {
         self.finish()?;
         let file = File::create(path)?;
         let options = write::WriteOptions {
