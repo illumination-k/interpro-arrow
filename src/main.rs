@@ -94,17 +94,19 @@ fn main() -> Result<()> {
                 }
                 OutFormat::Fasta => {
                     let gene_dir = dir.join("gene");
-                    
+
                     let gene_df = PartitionedIpcReader::new(gene_dir)
                         .with_org(org.to_owned())
                         .finish()?;
-                    let gene_df = df.join(
-                        &gene_df,
-                        ["gene_id"],
-                        ["gene_id"],
-                        polars::prelude::JoinType::Inner,
-                        None,
-                    )?.select(["gene_id", "seq"])?;
+                    let gene_df = df
+                        .join(
+                            &gene_df,
+                            ["gene_id"],
+                            ["gene_id"],
+                            polars::prelude::JoinType::Inner,
+                            None,
+                        )?
+                        .select(["gene_id", "seq"])?;
                     let len = gene_df.height();
                     let header = &Utf8Chunked::from_iter(std::iter::repeat(">").take(len))
                         + gene_df["gene_id"].utf8()?;

@@ -63,11 +63,9 @@ impl Term {
     pub fn try_from_tokens(tokens: &[Token]) -> Vec<Self> {
         tokens
             .iter()
-            .filter_map(|token| {
-                match token {
-                    Token::Name(name) => Term::try_infer(name).ok(),
-                    _ => None,
-                }
+            .filter_map(|token| match token {
+                Token::Name(name) => Term::try_infer(name).ok(),
+                _ => None,
             })
             .collect()
     }
