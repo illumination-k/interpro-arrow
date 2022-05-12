@@ -6,17 +6,17 @@ mod records;
 
 use std::fs;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use args::OutFormat;
-use polars::{chunked_array::ChunkedArray, datatypes::BooleanType};
+use polars::{
+    chunked_array::ChunkedArray,
+    datatypes::{BooleanType, Utf8Chunked},
+};
 use structopt::StructOpt;
 
 use crate::{
     args::{Opt, SubCommands},
-    parser::{
-        lex::{lex, Token},
-        Expr,
-    },
+    parser::Expr,
     partition::PartitionedIpcReader,
     records::Term,
 };
@@ -26,16 +26,20 @@ fn main() -> Result<()> {
 
     match &opt.subcommands {
         SubCommands::Register { input, org, dir } => {
+            let orgname = format!("org={}", org);
+            let domain_dir = dir.join("domain").join(&orgname);
+
+            if domain_dir.exists() {
+                return Err(anyhow!(format!("{} is already exists", org)));
+            }
             let (dr, gr) = gff3::Reader::from_path(input)?.finish()?;
             let orgname = format!("org={}", org);
-            let mut domain_dir = dir.clone();
-            domain_dir.push("domain");
-            domain_dir.push(&orgname);
+            let domain_dir = dir.join("domain").join(&orgname);
+
             dr.write(domain_dir)?;
 
-            let mut gene_path = dir.clone();
-            gene_path.push("gene");
-            gene_path.push(&orgname);
+            let mut gene_path = dir.join("gene").join(&orgname);
+
             fs::create_dir_all(&gene_path)?;
             gene_path.push(format!("{}.ipc", uuid::Uuid::new_v4()));
             gr.write(&gene_path)?;
@@ -47,23 +51,17 @@ fn main() -> Result<()> {
             format,
         } => {
             let format = format.as_ref().unwrap_or(&args::OutFormat::Id);
-            let tokens = lex(expr)?;
-            let mut source = vec![];
-            for token in tokens.iter() {
-                match token {
-                    Token::Name(s) => source.push(Term::try_infer(s)?),
-                    _ => {}
-                }
-            }
+            let sources = Term::try_from_expr(expr)?;
 
             let mut domain_dir = dir.clone();
             domain_dir.push("domain");
             let domain_df = PartitionedIpcReader::new(domain_dir)
                 .with_org(org.to_owned())
-                .with_source(Some(source))
+                .with_source(Some(sources))
                 .finish()?
                 .groupby(["gene_id"])?
                 .agg_list()?;
+                
             let expr = Expr::from_string(expr).unwrap();
             let mask: ChunkedArray<BooleanType> = domain_df["domain_name_agg_list"]
                 .list()?
@@ -79,15 +77,15 @@ fn main() -> Result<()> {
                 })
                 .collect::<Result<_>>()?;
 
+            let df = domain_df.filter(&mask)?;
+
             match format {
                 OutFormat::Id => {
-                    let df = domain_df.filter(&mask)?;
                     println!(
                         "{}",
                         df["gene_id"]
                             .0
-                            .utf8()
-                            .unwrap()
+                            .utf8()?
                             .into_iter()
                             .flatten()
                             .collect::<Vec<&str>>()
@@ -95,11 +93,34 @@ fn main() -> Result<()> {
                     )
                 }
                 OutFormat::Fasta => {
-                    let mut gene_dir = dir.clone();
-                    gene_dir.push("gene");
-                    let gene_df = PartitionedIpcReader::new(gene_dir).with_org(org.to_owned()).finish()?;
-                    dbg!(&gene_df);
-                },
+                    let gene_dir = dir.join("gene");
+                    
+                    let gene_df = PartitionedIpcReader::new(gene_dir)
+                        .with_org(org.to_owned())
+                        .finish()?;
+                    let gene_df = df.join(
+                        &gene_df,
+                        ["gene_id"],
+                        ["gene_id"],
+                        polars::prelude::JoinType::Inner,
+                        None,
+                    )?.select(["gene_id", "seq"])?;
+                    let len = gene_df.height();
+                    let header = &Utf8Chunked::from_iter(std::iter::repeat(">").take(len))
+                        + gene_df["gene_id"].utf8()?;
+                    let header_with_n =
+                        header + Utf8Chunked::from_iter(std::iter::repeat("\n").take(len));
+                    let fasta = &header_with_n + gene_df["seq"].utf8()?;
+
+                    println!(
+                        "{}",
+                        fasta
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<&str>>()
+                            .join("\n")
+                    );
+                }
             };
         }
     };

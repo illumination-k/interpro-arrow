@@ -47,7 +47,7 @@ pub enum SubCommands {
         expr: String,
         #[structopt(short = "-o", long = "org", about = "organism name")]
         org: Option<Vec<String>>,
-        #[structopt(short = "-f", long = "fmt", about = "output format")]
+        #[structopt(short = "-f", long = "format", about = "output format")]
         format: Option<OutFormat>,
     },
 }
