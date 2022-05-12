@@ -62,19 +62,18 @@ impl Term {
 
     pub fn try_from_tokens(tokens: &[Token]) -> Vec<Self> {
         tokens
-            .into_iter()
+            .iter()
             .filter_map(|token| {
-                let term = match token {
-                    Token::Name(name) => Term::try_infer(&name).ok(),
+                match token {
+                    Token::Name(name) => Term::try_infer(name).ok(),
                     _ => None,
-                };
-                term
+                }
             })
             .collect()
     }
 
     pub fn try_from_expr(expr: &str) -> Result<Vec<Self>> {
-        let tokens = lex(&expr)?;
+        let tokens = lex(expr)?;
         Ok(Self::try_from_tokens(&tokens))
     }
 }
