@@ -30,7 +30,7 @@ fn main() -> Result<()> {
             let domain_dir = dir.join("domain").join(&orgname);
 
             if domain_dir.exists() {
-                return Err(anyhow!(format!("{} is already exists", org)));
+                return Err(anyhow!(format!("{} is already registered", org)));
             }
             let (dr, gr) = gff3::Reader::from_path(input)?.finish()?;
             let orgname = format!("org={}", org);
@@ -61,7 +61,7 @@ fn main() -> Result<()> {
                 .finish()?
                 .groupby(["gene_id"])?
                 .agg_list()?;
-                
+
             let expr = Expr::from_string(expr).unwrap();
             let mask: ChunkedArray<BooleanType> = domain_df["domain_name_agg_list"]
                 .list()?
